@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: booking-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password_123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-booking_system}
+      MYSQL_USER: ${MYSQL_USER:-booking_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-booking_password_123}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_password_123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - booking-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: booking-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - booking-network
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: booking-api
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Server=mysql;Port=3306;Database=${MYSQL_DATABASE:-booking_system};User=${MYSQL_USER:-booking_user};Password=${MYSQL_PASSWORD:-booking_password_123};
+      - Redis__ConnectionString=redis:6379
+      - Jwt__Secret=${JWT_SECRET:-your-super-secret-jwt-key-minimum-32-characters-long}
+      - Jwt__Issuer=BookingSystem
+      - Jwt__Audience=BookingSystemUsers
+      - Jwt__ExpiryMinutes=60
+    ports:
+      - "5000:8080"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - booking-network
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  booking-network:
+    driver: bridge
