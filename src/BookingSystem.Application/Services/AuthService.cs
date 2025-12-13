@@ -30,6 +30,7 @@ public class AuthService : IAuthService
 
     public async Task<AuthResponseDto> RegisterAsync(RegisterRequestDto request)
     {
+        // Check if user already exists
         var existingUser = await _context.Users
             .FirstOrDefaultAsync(u => u.Email.ToLower() == request.Email.ToLower());
 
@@ -38,6 +39,7 @@ public class AuthService : IAuthService
             throw new ValidationException("Email already registered");
         }
 
+        // Get country
         var country = await _context.Countries
             .FirstOrDefaultAsync(c => c.Code.ToUpper() == request.CountryCode.ToUpper());
 
@@ -46,8 +48,14 @@ public class AuthService : IAuthService
             throw new NotFoundException($"Country with code '{request.CountryCode}' not found");
         }
 
+        // Hash password
         var passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
 
+        // Generate verification token (valid for 24 hours)
+        var verificationToken = _tokenService.GenerateEmailVerificationToken();
+        var tokenExpiry = DateTime.UtcNow.AddHours(24);
+
+        // Create user
         var user = new User
         {
             Email = request.Email.ToLower(),
@@ -56,17 +64,18 @@ public class AuthService : IAuthService
             LastName = request.LastName,
             CountryId = country.Id,
             IsEmailVerified = false,
+            EmailVerificationToken = verificationToken,
+            EmailVerificationTokenExpiry = tokenExpiry,
             Role = "User"
         };
 
         _context.Users.Add(user);
         await _context.SaveChangesAsync();
 
-        var verificationToken = _tokenService.GenerateEmailVerificationToken();
-        _verificationTokens[verificationToken] = user.Id;
-
+        // Send verification email (mock)
         await _emailService.SendVerificationEmailAsync(user.Email, verificationToken);
 
+        // Generate JWT
         var token = _tokenService.GenerateJwtToken(user);
         var refreshToken = _tokenService.GenerateRefreshToken();
 
@@ -91,6 +100,7 @@ public class AuthService : IAuthService
 
     public async Task<AuthResponseDto> LoginAsync(LoginRequestDto request)
     {
+        // Find user
         var user = await _context.Users
             .Include(u => u.Country)
             .FirstOrDefaultAsync(u => u.Email.ToLower() == request.Email.ToLower());
@@ -100,11 +110,13 @@ public class AuthService : IAuthService
             throw new ValidationException("Invalid email or password");
         }
 
+        // Verify password
         if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
         {
             throw new ValidationException("Invalid email or password");
         }
 
+        // Generate tokens
         var token = _tokenService.GenerateJwtToken(user);
         var refreshToken = _tokenService.GenerateRefreshToken();
 
@@ -129,23 +141,33 @@ public class AuthService : IAuthService
 
     public async Task<bool> VerifyEmailAsync(string token)
     {
-        if (!_verificationTokens.TryGetValue(token, out var userId))
+        if (string.IsNullOrWhiteSpace(token))
         {
-            throw new ValidationException("Invalid or expired verification token");
+            throw new ValidationException("Verification token is required");
         }
 
+        // Find user by token
         var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.Id == userId);
-            
+            .FirstOrDefaultAsync(u => u.EmailVerificationToken == token);
+
         if (user == null)
         {
-            throw new NotFoundException("User not found");
+            throw new ValidationException("Invalid verification token");
         }
 
-        user.IsEmailVerified = true;
-        await _context.SaveChangesAsync();
+        // Check if token expired
+        if (user.EmailVerificationTokenExpiry.HasValue && 
+            user.EmailVerificationTokenExpiry.Value < DateTime.UtcNow)
+        {
+            throw new ValidationException("Verification token has expired");
+        }
 
-        _verificationTokens.Remove(token);
+        // Mark as verified
+        user.IsEmailVerified = true;
+        user.EmailVerificationToken = null; // Clear token
+        user.EmailVerificationTokenExpiry = null;
+        
+        await _context.SaveChangesAsync();
 
         _logger.LogInformation("Email verified successfully for user: {Email}", user.Email);
 

@@ -96,10 +96,12 @@ builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>()
 
 // Application Services
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IPackageService, PackageService>();
 
 // Infrastructure Services
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IEmailService, MockEmailService>();
+builder.Services.AddScoped<IPaymentService, MockPaymentService>();
 
 // CORS (if needed for frontend)
 builder.Services.AddCors(options =>
