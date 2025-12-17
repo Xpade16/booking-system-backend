@@ -9,6 +9,7 @@ public interface IApplicationDbContext
     DbSet<Country> Countries { get; }
     DbSet<Package> Packages { get; }
     DbSet<UserPackage> UserPackages { get; }
+    DbSet<ClassSchedule> ClassSchedules { get; }
     
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

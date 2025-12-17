@@ -97,6 +97,7 @@ builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>()
 // Application Services
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPackageService, PackageService>();
+builder.Services.AddScoped<IScheduleService, ScheduleService>();
 
 // Infrastructure Services
 builder.Services.AddScoped<ITokenService, TokenService>();
@@ -133,5 +134,21 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var context = services.GetRequiredService<ApplicationDbContext>();
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        await DbInitializer.SeedAdminUserAsync(context, logger);
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred while seeding the admin user");
+    }
+}
 
 app.Run();

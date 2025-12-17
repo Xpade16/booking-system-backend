@@ -11,4 +11,5 @@ public class Country
     // Navigation properties
     public ICollection<User> Users { get; set; } = new List<User>();
     public ICollection<Package> Packages { get; set; } = new List<Package>();
+    public ICollection<ClassSchedule> ClassSchedules { get; set; } = new List<ClassSchedule>();
 }
