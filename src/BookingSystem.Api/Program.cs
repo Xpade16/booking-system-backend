@@ -98,6 +98,7 @@ builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>()
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPackageService, PackageService>();
 builder.Services.AddScoped<IScheduleService, ScheduleService>();
+builder.Services.AddScoped<IBookingService, BookingService>();
 
 // Infrastructure Services
 builder.Services.AddScoped<ITokenService, TokenService>();

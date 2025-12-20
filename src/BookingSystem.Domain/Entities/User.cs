@@ -19,5 +19,6 @@ public class User
     // Navigation properties
     public Country Country { get; set; } = null!;
     public ICollection<UserPackage> UserPackages { get; set; } = new List<UserPackage>();
+    public ICollection<Booking> Bookings { get; set; } = new List<Booking>();
 
 }

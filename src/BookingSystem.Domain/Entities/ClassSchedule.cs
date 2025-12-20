@@ -18,4 +18,5 @@ public class ClassSchedule
     
     // Navigation properties
     public Country Country { get; set; } = null!;
+    public ICollection<Booking> Bookings { get; set; } = new List<Booking>();
 }

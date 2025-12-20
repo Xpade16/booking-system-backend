@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using BookingSystem.Domain.Entities;
 
 namespace BookingSystem.Application.Data;
@@ -10,6 +11,8 @@ public interface IApplicationDbContext
     DbSet<Package> Packages { get; }
     DbSet<UserPackage> UserPackages { get; }
     DbSet<ClassSchedule> ClassSchedules { get; }
+    DbSet<Booking> Bookings { get; }
+    DatabaseFacade Database { get; }
     
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

@@ -16,6 +16,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Package> Packages => Set<Package>();
     public DbSet<UserPackage> UserPackages => Set<UserPackage>();
     public DbSet<ClassSchedule> ClassSchedules => Set<ClassSchedule>();
+    public DbSet<Booking> Bookings => Set<Booking>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

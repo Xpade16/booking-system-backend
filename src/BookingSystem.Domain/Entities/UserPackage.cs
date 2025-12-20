@@ -15,4 +15,5 @@ public class UserPackage
     // Navigation properties
     public User User { get; set; } = null!;
     public Package Package { get; set; } = null!;
+    public ICollection<Booking> Bookings { get; set; } = new List<Booking>();
 }

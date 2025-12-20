@@ -9,6 +9,7 @@ using BookingSystem.Application.Services.Interfaces;
 using BookingSystem.Domain.Entities;
 using BookingSystem.Domain.Exceptions;
 using BookingSystem.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace BookingSystem.Tests.Unit.Services;
 
@@ -22,8 +23,10 @@ public class PackageServiceTests : IDisposable
     public PackageServiceTests()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options;
+        .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+        .ConfigureWarnings(warnings => 
+            warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+        .Options;
 
         _context = new ApplicationDbContext(options);
         
