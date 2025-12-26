@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using BookingSystem.Application.Data;
 using BookingSystem.Application.DTOs.Booking;
 using BookingSystem.Application.Services.Interfaces;
@@ -11,12 +12,22 @@ namespace BookingSystem.Application.Services;
 public class BookingService : IBookingService
 {
     private readonly IApplicationDbContext _context;
+    private readonly IRedisService _redisService;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<BookingService> _logger;
+    private readonly bool _useRedisForConcurrency;
 
-    public BookingService(IApplicationDbContext context, ILogger<BookingService> logger)
+    public BookingService(
+        IApplicationDbContext context,
+        IRedisService redisService,
+        IConfiguration configuration,
+        ILogger<BookingService> logger)
     {
         _context = context;
+        _redisService = redisService;
+        _configuration = configuration;
         _logger = logger;
+        _useRedisForConcurrency = configuration.GetValue<bool>("Features:UseRedisForConcurrency", true);
     }
 
     public async Task<BookingResponseDto> BookClassAsync(int userId, int classScheduleId)
@@ -40,17 +51,11 @@ public class BookingService : IBookingService
             throw new BookingException("Cannot book a class that has already started");
         }
 
-        // 2. Check available slots
-        if (classSchedule.AvailableSlots <= 0)
-        {
-            throw new BookingException("This class is fully booked");
-        }
-
-        // 3. Check for existing booking
+        // 2. Check for existing booking
         var existingBooking = await _context.Bookings
-            .FirstOrDefaultAsync(b => 
-                b.UserId == userId && 
-                b.ClassScheduleId == classScheduleId && 
+            .FirstOrDefaultAsync(b =>
+                b.UserId == userId &&
+                b.ClassScheduleId == classScheduleId &&
                 !b.IsCancelled);
 
         if (existingBooking != null)
@@ -58,13 +63,13 @@ public class BookingService : IBookingService
             throw new BookingException("You have already booked this class");
         }
 
-        // 4. Check for overlapping bookings
+        // 3. Check for overlapping bookings
         var hasOverlap = await _context.Bookings
             .Include(b => b.ClassSchedule)
-            .AnyAsync(b => 
-                b.UserId == userId && 
+            .AnyAsync(b =>
+                b.UserId == userId &&
                 !b.IsCancelled &&
-                ((b.ClassSchedule.StartTime < classSchedule.EndTime && 
+                ((b.ClassSchedule.StartTime < classSchedule.EndTime &&
                   b.ClassSchedule.EndTime > classSchedule.StartTime)));
 
         if (hasOverlap)
@@ -72,15 +77,15 @@ public class BookingService : IBookingService
             throw new BookingException("You have an overlapping booking at this time");
         }
 
-        // 5. Get active user package with sufficient credits
+        // 4. Get active user package with sufficient credits
         var userPackage = await _context.UserPackages
             .Include(up => up.Package)
-            .Where(up => 
-                up.UserId == userId && 
-                !up.IsExpired && 
+            .Where(up =>
+                up.UserId == userId &&
+                !up.IsExpired &&
                 up.ExpiresAt > DateTime.UtcNow &&
                 up.RemainingCredits >= classSchedule.RequiredCredits)
-            .OrderBy(up => up.ExpiresAt) // Use package expiring soonest
+            .OrderBy(up => up.ExpiresAt)
             .FirstOrDefaultAsync();
 
         if (userPackage == null)
@@ -90,17 +95,79 @@ public class BookingService : IBookingService
                 "Please purchase a package to continue.");
         }
 
-        // 6. Create booking and update credits/slots atomically
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
+        // 5. Try to reserve slot using Redis or DB
+        bool slotReserved = false;
+        bool useRedis = _useRedisForConcurrency; // Local variable for this request
+
+        if (useRedis)
+        {
+            try
+            {
+                // Ensure Redis has the current slot count
+                var redisSlots = await _redisService.GetAvailableSlotsAsync(classScheduleId);
+                if (redisSlots == -1)
+                {
+                    // Key doesn't exist, initialize it
+                    await _redisService.SetAvailableSlotsAsync(classScheduleId, classSchedule.AvailableSlots);
+                }
+
+                // Try atomic decrement in Redis
+                slotReserved = await _redisService.TryDecrementSlotAsync(classScheduleId);
+
+                if (slotReserved)
+                {
+                    _logger.LogInformation("🔴 Redis: Slot reserved for class {ClassId}", classScheduleId);
+                }
+                else
+                {
+                    _logger.LogWarning("🔴 Redis: No slots available for class {ClassId}", classScheduleId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "🔴 Redis: Error, falling back to database");
+                useRedis = false;
+            }
+        }
+
+        if (!useRedis)
+        {
+            // Fallback to DB transaction
+            _logger.LogInformation("💾 DB: Using database for slot reservation");
+
+            if (classSchedule.AvailableSlots <= 0)
+            {
+                throw new BookingException("This class is fully booked");
+            }
+
+            slotReserved = true;
+            classSchedule.AvailableSlots -= 1;
+        }
+
+        if (!slotReserved)
+        {
+            throw new BookingException("This class is fully booked");
+        }
+
+        // 6. Create booking and update credits atomically
+        var transaction = await _context.Database.BeginTransactionAsync();
+
         try
         {
             // Deduct credits
             userPackage.RemainingCredits -= classSchedule.RequiredCredits;
-            
-            // Decrement available slots
-            classSchedule.AvailableSlots -= 1;
-            
+
+            // Update DB slots based on mode
+            if (!useRedis)
+            {
+                // Already decremented above
+            }
+            else
+            {
+                // Sync DB with Redis
+                classSchedule.AvailableSlots = await _redisService.GetAvailableSlotsAsync(classScheduleId);
+            }
+
             // Create booking
             var booking = new Booking
             {
@@ -114,11 +181,11 @@ public class BookingService : IBookingService
 
             _context.Bookings.Add(booking);
             await _context.SaveChangesAsync();
-            
+
             await transaction.CommitAsync();
 
             _logger.LogInformation(
-                "Booking created: User {UserId}, Class {ClassId}, Credits {Credits}",
+                "✅ Booking created: User {UserId}, Class {ClassId}, Credits {Credits}",
                 userId, classScheduleId, classSchedule.RequiredCredits);
 
             return new BookingResponseDto
@@ -136,8 +203,20 @@ public class BookingService : IBookingService
         catch (Exception ex)
         {
             await transaction.RollbackAsync();
+
+            // Rollback Redis slot if it was decremented
+            if (useRedis && slotReserved)
+            {
+                await _redisService.IncrementSlotAsync(classScheduleId);
+                _logger.LogWarning("🔴 Redis: Slot rollback for class {ClassId}", classScheduleId);
+            }
+
             _logger.LogError(ex, "Failed to create booking for user {UserId}", userId);
             throw;
+        }
+        finally
+        {
+            await transaction.DisposeAsync();
         }
     }
 
@@ -174,8 +253,8 @@ public class BookingService : IBookingService
         var isRefundable = hoursUntilClass >= 4;
 
         // 3. Cancel booking and process refund
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
+        var transaction = await _context.Database.BeginTransactionAsync();
+
         try
         {
             // Mark as cancelled
@@ -190,14 +269,30 @@ public class BookingService : IBookingService
                 booking.IsRefunded = true;
             }
 
-            // Increment available slots
+            // Increment available slots in DB
             booking.ClassSchedule.AvailableSlots += 1;
 
             await _context.SaveChangesAsync();
             await transaction.CommitAsync();
 
+            // Increment slot in Redis
+            if (_useRedisForConcurrency)
+            {
+                try
+                {
+                    await _redisService.IncrementSlotAsync(booking.ClassScheduleId);
+                    _logger.LogInformation("🔴 Redis: Slot incremented after cancellation for class {ClassId}",
+                        booking.ClassScheduleId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "🔴 Redis: Failed to increment slot after cancellation");
+                    // Don't fail the cancellation if Redis update fails
+                }
+            }
+
             _logger.LogInformation(
-                "Booking cancelled: Id {BookingId}, Refunded: {IsRefunded}",
+                "✅ Booking cancelled: Id {BookingId}, Refunded: {IsRefunded}",
                 bookingId, isRefundable);
 
             var message = isRefundable
@@ -217,6 +312,10 @@ public class BookingService : IBookingService
             await transaction.RollbackAsync();
             _logger.LogError(ex, "Failed to cancel booking {BookingId}", bookingId);
             throw;
+        }
+        finally
+        {
+            await transaction.DisposeAsync();
         }
     }
 
@@ -248,7 +347,7 @@ public class BookingService : IBookingService
                 IsCancelled = b.IsCancelled,
                 IsRefunded = b.IsRefunded,
                 CanCancel = !b.IsCancelled && b.ClassSchedule.StartTime > DateTime.UtcNow,
-                CanCheckIn = !b.IsCancelled && 
+                CanCheckIn = !b.IsCancelled &&
                             b.CheckedInAt == null &&
                             b.ClassSchedule.StartTime <= DateTime.UtcNow.AddMinutes(15) &&
                             b.ClassSchedule.EndTime >= DateTime.UtcNow

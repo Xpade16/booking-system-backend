@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using Moq;
 using Xunit;
 using FluentAssertions;
 using BookingSystem.Application.Services;
+using BookingSystem.Application.Services.Interfaces;
 using BookingSystem.Domain.Entities;
 using BookingSystem.Domain.Exceptions;
 using BookingSystem.Infrastructure.Data;
@@ -14,6 +16,8 @@ namespace BookingSystem.Tests.Unit.Services;
 public class BookingServiceTests : IDisposable
 {
     private readonly ApplicationDbContext _context;
+    private readonly Mock<IRedisService> _redisServiceMock;
+    private readonly Mock<IConfiguration> _configurationMock;
     private readonly Mock<ILogger<BookingService>> _loggerMock;
     private readonly BookingService _bookingService;
     private readonly User _testUser;
@@ -29,7 +33,8 @@ public class BookingServiceTests : IDisposable
         .Options;
 
         _context = new ApplicationDbContext(options);
-        
+        _redisServiceMock = new Mock<IRedisService>();
+        _configurationMock = new Mock<IConfiguration>();
         // Seed test data
         var country = new Country 
         { 
@@ -96,7 +101,11 @@ public class BookingServiceTests : IDisposable
         _context.SaveChanges();
 
         _loggerMock = new Mock<ILogger<BookingService>>();
-        _bookingService = new BookingService(_context, _loggerMock.Object);
+        _bookingService = new BookingService(
+            _context, 
+            _redisServiceMock.Object,
+            _configurationMock.Object,
+            _loggerMock.Object);
     }
 
     [Fact]

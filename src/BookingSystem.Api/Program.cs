@@ -5,6 +5,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using StackExchange.Redis; // Make sure this is here
 using BookingSystem.Application.Services;
 using BookingSystem.Application.Services.Interfaces;
 using BookingSystem.Application.Validators;
@@ -28,7 +29,6 @@ builder.Services.AddSwaggerGen(c =>
         Description = "A portfolio-grade booking system backend with JWT authentication"
     });
     
-    // Add JWT authentication to Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer' [space] and then your token",
@@ -54,16 +54,40 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+// Redis configuration - ADD THIS BEFORE DATABASE
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        var configuration = ConfigurationOptions.Parse(redisConnectionString);
+        configuration.AbortOnConnectFail = false;
+        var multiplexer = ConnectionMultiplexer.Connect(configuration);
+        logger.LogInformation("✅ Redis connected successfully");
+        return multiplexer;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "❌ Failed to connect to Redis. Application will use database fallback.");
+        // Return a mock that will cause graceful fallback
+        var configuration = ConfigurationOptions.Parse(redisConnectionString);
+        configuration.AbortOnConnectFail = false;
+        return ConnectionMultiplexer.Connect(configuration);
+    }
+});
+
 // Database configuration
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
 
-builder.Services.AddScoped<IApplicationDbContext>(provider => provider.GetRequiredService<ApplicationDbContext>());
-
+builder.Services.AddScoped<IApplicationDbContext>(provider => 
+    provider.GetRequiredService<ApplicationDbContext>());
 
 // JWT Authentication
-var jwtSecret = builder.Configuration["Jwt:Secret"] ?? throw new InvalidOperationException("JWT Secret not configured");
+var jwtSecret = builder.Configuration["Jwt:Secret"] ?? 
+    throw new InvalidOperationException("JWT Secret not configured");
 var key = Encoding.ASCII.GetBytes(jwtSecret);
 
 builder.Services.AddAuthentication(options =>
@@ -73,7 +97,7 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.RequireHttpsMetadata = false; // Set to true in production
+    options.RequireHttpsMetadata = false;
     options.SaveToken = true;
     options.TokenValidationParameters = new TokenValidationParameters
     {
@@ -104,8 +128,9 @@ builder.Services.AddScoped<IBookingService, BookingService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IEmailService, MockEmailService>();
 builder.Services.AddScoped<IPaymentService, MockPaymentService>();
+builder.Services.AddScoped<IRedisService, RedisService>();
 
-// CORS (if needed for frontend)
+// CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -136,6 +161,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// Seed admin user
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -153,3 +179,6 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+// Make Program class accessible to tests
+public partial class Program { }

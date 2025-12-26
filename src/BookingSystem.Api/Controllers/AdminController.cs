@@ -34,9 +34,9 @@ public class AdminController : ControllerBase
         {
             var schedule = await _scheduleService.CreateScheduleAsync(request);
             return CreatedAtAction(
-                nameof(ScheduleController.GetScheduleById), 
+                nameof(ScheduleController.GetScheduleById),
                 "Schedule",
-                new { id = schedule.Id }, 
+                new { id = schedule.Id },
                 schedule);
         }
         catch (NotFoundException ex)
@@ -93,6 +93,37 @@ public class AdminController : ControllerBase
         catch (NotFoundException ex)
         {
             return NotFound(new { message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Check Redis connection status (Admin only)
+    /// </summary>
+    [HttpGet("redis/health")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> CheckRedisHealth()
+    {
+        var redisService = HttpContext.RequestServices.GetRequiredService<IRedisService>();
+        var isConnected = await redisService.IsConnectedAsync();
+
+        if (isConnected)
+        {
+            return Ok(new
+            {
+                status = "healthy",
+                message = "Redis is connected and responding",
+                timestamp = DateTime.UtcNow
+            });
+        }
+        else
+        {
+            return StatusCode(503, new
+            {
+                status = "unhealthy",
+                message = "Redis is not responding",
+                timestamp = DateTime.UtcNow
+            });
         }
     }
 }
